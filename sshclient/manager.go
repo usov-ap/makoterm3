@@ -8,7 +8,10 @@ import (
 	"makoterm/database"
 
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/agent"
 	"golang.org/x/term"
+	"net"
+	"path/filepath"
 )
 
 // Session represents an active SSH session wrapper
@@ -20,14 +23,39 @@ type Session struct {
 
 // Connect starts a new full-screen SSH session
 func Connect(host database.Host) error {
-	// For simplicity, we just use the password from the DB. 
-	// In a real app, this should try ssh-agent, ~/.ssh/id_rsa, then password.
+	var authMethods []ssh.AuthMethod
+
+	// 1. Try SSH Agent
+	if authSock := os.Getenv("SSH_AUTH_SOCK"); authSock != "" {
+		if conn, err := net.Dial("unix", authSock); err == nil {
+			agentClient := agent.NewClient(conn)
+			authMethods = append(authMethods, ssh.PublicKeysCallback(agentClient.Signers))
+		}
+	}
+
+	// 2. Try standard keys if they exist
+	homeDir, _ := os.UserHomeDir()
+	keyPaths := []string{
+		filepath.Join(homeDir, ".ssh", "id_ed25519"),
+		filepath.Join(homeDir, ".ssh", "id_rsa"),
+	}
 	
+	for _, p := range keyPaths {
+		if key, err := os.ReadFile(p); err == nil {
+			if signer, err := ssh.ParsePrivateKey(key); err == nil {
+				authMethods = append(authMethods, ssh.PublicKeys(signer))
+			}
+		}
+	}
+
+	// 3. Fallback to password
+	if host.Password != "" {
+		authMethods = append(authMethods, ssh.Password(host.Password))
+	}
+
 	config := &ssh.ClientConfig{
-		User: host.User,
-		Auth: []ssh.AuthMethod{
-			ssh.Password(host.Password),
-		},
+		User:            host.User,
+		Auth:            authMethods,
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // Insecure for demo, should verify in production
 	}
 	

@@ -18,6 +18,8 @@ type MillerColumns struct {
 	ActiveCol   int // 0: Groups, 1: Hosts
 	GroupCursor int
 	HostCursor  int
+	GroupOffset int
+	HostOffset  int
 }
 
 func (m *MillerColumns) UpdateData(groups []database.Group, hosts []database.Host) {
@@ -40,16 +42,34 @@ func (m *MillerColumns) UpdateData(groups []database.Group, hosts []database.Hos
 func (m *MillerColumns) MoveUp() {
 	if m.ActiveCol == 0 && m.GroupCursor > 0 {
 		m.GroupCursor--
+		if m.GroupCursor < m.GroupOffset {
+			m.GroupOffset = m.GroupCursor
+		}
 	} else if m.ActiveCol == 1 && m.HostCursor > 0 {
 		m.HostCursor--
+		if m.HostCursor < m.HostOffset {
+			m.HostOffset = m.HostCursor
+		}
 	}
 }
 
 func (m *MillerColumns) MoveDown() {
+	// Account for the border in Height (Height - 2 for actual items)
+	visibleHeight := m.Height - 2
+	if visibleHeight < 1 {
+		visibleHeight = 1
+	}
+
 	if m.ActiveCol == 0 && m.GroupCursor < len(m.Groups)-1 {
 		m.GroupCursor++
+		if m.GroupCursor >= m.GroupOffset+visibleHeight {
+			m.GroupOffset = m.GroupCursor - visibleHeight + 1
+		}
 	} else if m.ActiveCol == 1 && m.HostCursor < len(m.Hosts)-1 {
 		m.HostCursor++
+		if m.HostCursor >= m.HostOffset+visibleHeight {
+			m.HostOffset = m.HostCursor - visibleHeight + 1
+		}
 	}
 }
 
@@ -85,10 +105,26 @@ func (m *MillerColumns) View() string {
 	}
 
 	colWidth := (m.Width - 4) / 3
+	visibleHeight := m.Height - 2
+	if visibleHeight < 1 {
+		visibleHeight = 1
+	}
+
+	// Adjust offsets if screen resizes
+	if m.GroupCursor >= m.GroupOffset+visibleHeight {
+		m.GroupOffset = m.GroupCursor - visibleHeight + 1
+	}
+	if m.HostCursor >= m.HostOffset+visibleHeight {
+		m.HostOffset = m.HostCursor - visibleHeight + 1
+	}
 
 	// Column 1: Groups
 	var groupItems []string
-	for i, g := range m.Groups {
+	if m.GroupOffset > 0 {
+		groupItems = append(groupItems, NormalItemStyle.Render("  ↑ "))
+	}
+	for i := m.GroupOffset; i < len(m.Groups) && i < m.GroupOffset+visibleHeight; i++ {
+		g := m.Groups[i]
 		cursor := "  "
 		style := NormalItemStyle
 		if i == m.GroupCursor {
@@ -99,8 +135,11 @@ func (m *MillerColumns) View() string {
 				style = SelectedStyle.Copy().Background(SumiInk3) // slightly dimmed if inactive
 			}
 		}
-		label := fmt.Sprintf("%s%s", cursor, g.Name)
+		label := fmt.Sprintf("%s📁 %s", cursor, g.Name)
 		groupItems = append(groupItems, style.Width(colWidth-4).Render(label))
+	}
+	if len(m.Groups) > m.GroupOffset+visibleHeight {
+		groupItems = append(groupItems, NormalItemStyle.Render("  ↓ "))
 	}
 	
 	groupStyle := ColumnStyle.Copy().Width(colWidth).Height(m.Height)
@@ -111,7 +150,11 @@ func (m *MillerColumns) View() string {
 
 	// Column 2: Hosts
 	var hostItems []string
-	for i, h := range m.Hosts {
+	if m.HostOffset > 0 {
+		hostItems = append(hostItems, NormalItemStyle.Render("  ↑ "))
+	}
+	for i := m.HostOffset; i < len(m.Hosts) && i < m.HostOffset+visibleHeight; i++ {
+		h := m.Hosts[i]
 		cursor := "  "
 		style := NormalItemStyle
 		if i == m.HostCursor {
@@ -122,8 +165,11 @@ func (m *MillerColumns) View() string {
 				style = SelectedStyle.Copy().Background(SumiInk3)
 			}
 		}
-		label := fmt.Sprintf("%s%s", cursor, h.Name)
+		label := fmt.Sprintf("%s🖥️  %s", cursor, h.Name)
 		hostItems = append(hostItems, style.Width(colWidth-4).Render(label))
+	}
+	if len(m.Hosts) > m.HostOffset+visibleHeight {
+		hostItems = append(hostItems, NormalItemStyle.Render("  ↓ "))
 	}
 
 	hostStyle := ColumnStyle.Copy().Width(colWidth).Height(m.Height)
