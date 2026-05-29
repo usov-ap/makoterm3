@@ -1,64 +1,64 @@
 # MakoTerm3 🦈
 
-A lightning-fast, aesthetic, and fully-featured Terminal UI (TUI) SSH client built with Go and Bubble Tea. MakoTerm3 combines an integrated SQLite database, a Miller Columns tree navigation for your hosts, and a seamless native SSH multiplexer into a single, highly portable binary.
+Молниеносный, эстетичный и полнофункциональный TUI (Terminal UI) SSH-клиент, написанный на Go с использованием фреймворка Bubble Tea. MakoTerm3 объединяет в себе локальную базу данных SQLite, древовидную навигацию по серверам (Miller Columns) и бесшовный встроенный SSH-мультиплексор в едином, легко переносимом бинарном файле.
 
-## Features ✨
+## Возможности ✨
 
-- **Native SSH Client**: Powered by `golang.org/x/crypto/ssh`. No need to rely on external `ssh` binaries.
-- **Smart Authentication**: Automatically supports `ssh-agent`, local keys (`~/.ssh/id_rsa`, `~/.ssh/id_ed25519`), with database password fallback.
-- **Miller Columns Navigation**: Browse your server groups and hosts with an elegant, Ranger-like layout.
-- **Pagination & Scrolling**: Fluidly handles hundreds of servers with automatic list pagination and offset tracking.
-- **Integrated Database**: Safely store your server groups, addresses, users, and passwords using SQLite + GORM.
-- **TUI Multiplexer**: Instantly jump in and out of SSH sessions without losing your UI state. Perfect for backgrounding sessions.
-- **Kanagawa Theme & Nerd Fonts**: Soft, aesthetic, and eye-pleasing dark theme integrated via `lipgloss` with beautiful 📁 and 🖥️ icons.
-- **Built-in CRUD**: Add, edit, and delete hosts and groups directly from the TUI with beautiful inline forms.
+- **Нативный SSH-клиент**: Работает под капотом `golang.org/x/crypto/ssh`. Никакой зависимости от внешних бинарников `ssh`.
+- **Умная Аутентификация**: Автоматическая поддержка `ssh-agent`, локальных ключей (`~/.ssh/id_rsa`, `~/.ssh/id_ed25519`), а также возможность сохранения паролей в базе данных (как запасной вариант).
+- **Навигация Miller Columns**: Перемещение по группам и хостам в элегантном многоколонном интерфейсе в стиле файлового менеджера Ranger.
+- **Скроллинг и Пагинация**: Клиент легко справляется с сотнями серверов, автоматически прокручивая списки без визуальных глитчей.
+- **Встроенная база данных**: Безопасное локальное хранение данных о серверах, портах, пользователях и паролях с использованием SQLite + GORM.
+- **TUI Мультиплексор**: Мгновенно переключайтесь между интерфейсом (TUI) и SSH-сессиями без потери состояния UI. Идеально для удержания сессий в фоне.
+- **Тема Kanagawa и Nerd Fonts**: Мягкая, стильная и приятная для глаз темная тема, дополненная красивыми иконками 📁 и 🖥️ для лучшего восприятия.
+- **Встроенные CRUD операции**: Создавайте, редактируйте и удаляйте хосты и группы прямо из интерфейса клиента через удобные встроенные формы.
 
-## Installation 🚀
+## Установка 🚀
 
-You can build MakoTerm3 from source. Make sure you have Go (1.20+) installed.
+Убедитесь, что у вас установлен Go (версии 1.20 или выше).
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/makoterm3.git
+# Клонируем репозиторий
+git clone https://github.com/ВАШ_ЛОГИН/makoterm3.git
 cd makoterm3
 
-# Download dependencies and build
+# Скачиваем зависимости и собираем проект
 go mod tidy
 go build -o makoterm
 
-# Run the client
+# Запускаем клиент
 ./makoterm
 ```
 
-## Usage & Keybindings ⌨️
+## Использование и Горячие клавиши ⌨️
 
-By default, the SQLite database is created in your home directory: `~/.makoterm.db`. The application automatically seeds a `Root` group to get you started.
+По умолчанию SQLite база данных создается в вашей домашней директории: `~/.makoterm.db`. При первом запуске приложение автоматически создаст группу `Root` с парой демо-серверов.
 
-### Navigation
-- `↑` / `k` : Move cursor up
-- `↓` / `j` : Move cursor down
-- `←` / `h` : Move to previous column (Groups)
-- `→` / `l` : Move to next column (Hosts)
-- `Enter`   : Connect to the selected host (if in the Hosts column)
+### Навигация
+- `↑` / `k` : Переместить курсор вверх
+- `↓` / `j` : Переместить курсор вниз
+- `←` / `h` : Переключиться в предыдущую колонку (Группы)
+- `→` / `l` : Переключиться в следующую колонку (Хосты)
+- `Enter`   : Подключиться к выбранному серверу (находясь в колонке хостов)
 
-### Management (CRUD)
-- `a` : **Add**. Adds a new group (if in Groups column) or a new host (if in Hosts column).
-- `e` : **Edit**. Edits the currently selected group or host.
-- `d` : **Delete**. Deletes the currently selected group or host.
+### Управление базой (CRUD)
+- `a` : **Добавить (Add)**. Создает новую группу (в первой колонке) или новый хост (во второй колонке).
+- `e` : **Редактировать (Edit)**. Изменить данные выделенной группы или хоста.
+- `d` : **Удалить (Delete)**. Безвозвратно удаляет выделенную группу или хост.
 
-### Form Navigation
-- `Tab` / `↓` : Next field
-- `Shift+Tab` / `↑` : Previous field
-- `Enter` : Save and submit form
-- `Esc` : Cancel and return to navigation
+### Навигация в Формах
+- `Tab` / `↓` : Следующее поле
+- `Shift+Tab` / `↑` : Предыдущее поле
+- `Enter` : Сохранить данные
+- `Esc` : Отменить и вернуться к навигации
 
-### Quitting
-- `q` / `Ctrl+C` : Quit the application
+### Выход
+- `q` / `Ctrl+C` : Выйти из приложения
 
-## Screenshots 📸
+## Скриншоты 📸
 
-*(Add screenshots of your UI here! Show the Kanagawa theme, the forms, and the SSH session)*
+*(Добавьте скриншоты вашего UI здесь! Покажите тему Kanagawa, окна редактирования и запущенную SSH-сессию)*
 
-## License 📜
+## Лицензия 📜
 
-Distributed under the MIT License. See `LICENSE` for more information.
+Распространяется под лицензией MIT. Подробности смотрите в файле `LICENSE`.
