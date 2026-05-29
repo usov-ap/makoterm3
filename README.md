@@ -5,10 +5,12 @@ A lightning-fast, aesthetic, and fully-featured Terminal UI (TUI) SSH client bui
 ## Features ✨
 
 - **Native SSH Client**: Powered by `golang.org/x/crypto/ssh`. No need to rely on external `ssh` binaries.
+- **Smart Authentication**: Automatically supports `ssh-agent`, local keys (`~/.ssh/id_rsa`, `~/.ssh/id_ed25519`), with database password fallback.
 - **Miller Columns Navigation**: Browse your server groups and hosts with an elegant, Ranger-like layout.
+- **Pagination & Scrolling**: Fluidly handles hundreds of servers with automatic list pagination and offset tracking.
 - **Integrated Database**: Safely store your server groups, addresses, users, and passwords using SQLite + GORM.
 - **TUI Multiplexer**: Instantly jump in and out of SSH sessions without losing your UI state. Perfect for backgrounding sessions.
-- **Kanagawa Theme**: Soft, aesthetic, and eye-pleasing dark theme integrated via `lipgloss`.
+- **Kanagawa Theme & Nerd Fonts**: Soft, aesthetic, and eye-pleasing dark theme integrated via `lipgloss` with beautiful 📁 and 🖥️ icons.
 - **Built-in CRUD**: Add, edit, and delete hosts and groups directly from the TUI with beautiful inline forms.
 
 ## Installation 🚀
