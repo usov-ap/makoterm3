@@ -57,7 +57,7 @@ go build -o makoterm
 
 ## Скриншоты 📸
 
-*(Добавьте скриншоты вашего UI здесь! Покажите тему Kanagawa, окна редактирования и запущенную SSH-сессию)*
+![MakoTerm3 Interface](images/screenshot.png)
 
 ## Лицензия 📜
 
