@@ -30,7 +30,7 @@ func main() {
 		}
 
 		m := finalModel.(ui.Model)
-		
+
 		// If user pressed q or ctrl+c
 		if m.ShouldQuit {
 			break
@@ -41,7 +41,7 @@ func main() {
 			// Save the state to resume later
 			model = m
 			model.SelectedToConnect = nil // Reset so we don't connect in a loop
-			
+
 			// We are now outside AltScreen. The terminal is ours.
 			fmt.Printf("\n🚀 Connecting to %s...\n", m.SelectedToConnect.Name)
 			err = sshclient.Connect(*m.SelectedToConnect)

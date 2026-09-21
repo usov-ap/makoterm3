@@ -9,7 +9,6 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 type FormType int
@@ -27,11 +26,13 @@ type Form struct {
 	TargetHost  *database.Host
 
 	inputs []textinput.Model
+	labels []string
 	focus  int
 }
 
 func NewForm(fType FormType, group *database.Group, host *database.Host) Form {
 	var inputs []textinput.Model
+	var labels []string
 
 	switch fType {
 	case FormTypeGroupAdd, FormTypeGroupEdit:
@@ -42,26 +43,30 @@ func NewForm(fType FormType, group *database.Group, host *database.Host) Form {
 			name.SetValue(group.Name)
 		}
 		inputs = append(inputs, name)
+		labels = append(labels, "Name")
 
 	case FormTypeHostAdd, FormTypeHostEdit:
 		name := textinput.New()
-		name.Placeholder = "Host Name (e.g. Prod DB)"
+		name.Placeholder = "e.g. Production DB"
 		name.Focus()
 
 		addr := textinput.New()
-		addr.Placeholder = "Address (e.g. 192.168.1.100)"
+		addr.Placeholder = "e.g. 192.168.1.100"
 
 		port := textinput.New()
-		port.Placeholder = "Port (e.g. 22)"
+		port.Placeholder = "e.g. 22"
 		port.SetValue("22")
 
 		user := textinput.New()
-		user.Placeholder = "User (e.g. root)"
+		user.Placeholder = "e.g. root"
 
 		pass := textinput.New()
-		pass.Placeholder = "Password (optional)"
+		pass.Placeholder = "optional, prefer SSH keys"
 		pass.EchoMode = textinput.EchoPassword
 		pass.EchoCharacter = '•'
+
+		keyPath := textinput.New()
+		keyPath.Placeholder = "e.g. ~/.ssh/id_rsa"
 
 		if fType == FormTypeHostEdit && host != nil {
 			name.SetValue(host.Name)
@@ -69,9 +74,11 @@ func NewForm(fType FormType, group *database.Group, host *database.Host) Form {
 			port.SetValue(strconv.Itoa(host.Port))
 			user.SetValue(host.User)
 			pass.SetValue(host.Password)
+			keyPath.SetValue(host.KeyPath)
 		}
 
-		inputs = append(inputs, name, addr, port, user, pass)
+		inputs = append(inputs, name, addr, port, user, pass, keyPath)
+		labels = append(labels, "Name", "Address", "Port", "User", "Password", "Key Path")
 	}
 
 	return Form{
@@ -79,6 +86,7 @@ func NewForm(fType FormType, group *database.Group, host *database.Host) Form {
 		TargetGroup: group,
 		TargetHost:  host,
 		inputs:      inputs,
+		labels:      labels,
 		focus:       0,
 	}
 }
@@ -137,59 +145,92 @@ func (f Form) View() string {
 		title = "Edit Host"
 	}
 
-	b.WriteString(TitleStyle.Render(title))
+	b.WriteString(FormTitleStyle.Render(title))
 	b.WriteString("\n\n")
 
 	for i := range f.inputs {
+		b.WriteString(FormLabelStyle.Render(f.labels[i]))
+		b.WriteString("\n")
 		b.WriteString(f.inputs[i].View())
 		b.WriteString("\n\n")
 	}
 
-	b.WriteString(HelpStyle.Render("tab/shift+tab: next/prev field • enter: save • esc: cancel"))
+	b.WriteString(MutedStyle.Render("Tab next • Shift+Tab prev • Enter save • Esc cancel"))
 
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(CrystalBlue).
-		Padding(1, 2).
-		Render(b.String())
+	return DialogStyle.Render(b.String())
 }
 
-// Save executes the database save operation based on the form inputs
+// Save validates inputs and executes the database save operation.
 func (f *Form) Save() error {
 	switch f.Type {
 	case FormTypeGroupAdd:
-		g := &database.Group{Name: f.inputs[0].Value()}
-		// If we are creating a subgroup, we'd set ParentID. For now, we only have root groups in UI.
-		// Wait, we seeded a root group with ID=1. Let's make it a child of ID=1 if possible.
-		// Or just leave parent_id null so it appears in GetRootGroups.
+		name := strings.TrimSpace(f.inputs[0].Value())
+		if name == "" {
+			return fmt.Errorf("group name cannot be empty")
+		}
+		// Make new groups children of the root group
+		root, err := database.GetRootGroup()
+		if err != nil {
+			g := &database.Group{Name: name}
+			return database.CreateGroup(g)
+		}
+		g := &database.Group{Name: name, ParentID: &root.ID}
 		return database.CreateGroup(g)
 
 	case FormTypeGroupEdit:
 		if f.TargetGroup != nil {
-			f.TargetGroup.Name = f.inputs[0].Value()
+			name := strings.TrimSpace(f.inputs[0].Value())
+			if name == "" {
+				return fmt.Errorf("group name cannot be empty")
+			}
+			f.TargetGroup.Name = name
 			return database.UpdateGroup(f.TargetGroup)
 		}
 
 	case FormTypeHostAdd:
-		port, _ := strconv.Atoi(f.inputs[2].Value())
+		name := strings.TrimSpace(f.inputs[0].Value())
+		addr := strings.TrimSpace(f.inputs[1].Value())
+		if name == "" {
+			return fmt.Errorf("host name cannot be empty")
+		}
+		if addr == "" {
+			return fmt.Errorf("address cannot be empty")
+		}
+		port, err := strconv.Atoi(strings.TrimSpace(f.inputs[2].Value()))
+		if err != nil || port < 1 || port > 65535 {
+			return fmt.Errorf("port must be a number between 1 and 65535")
+		}
 		h := &database.Host{
 			GroupID:  &f.TargetGroup.ID,
-			Name:     f.inputs[0].Value(),
-			Address:  f.inputs[1].Value(),
+			Name:     name,
+			Address:  addr,
 			Port:     port,
-			User:     f.inputs[3].Value(),
+			User:     strings.TrimSpace(f.inputs[3].Value()),
 			Password: f.inputs[4].Value(),
+			KeyPath:  strings.TrimSpace(f.inputs[5].Value()),
 		}
 		return database.CreateHost(h)
 
 	case FormTypeHostEdit:
 		if f.TargetHost != nil {
-			port, _ := strconv.Atoi(f.inputs[2].Value())
-			f.TargetHost.Name = f.inputs[0].Value()
-			f.TargetHost.Address = f.inputs[1].Value()
+			name := strings.TrimSpace(f.inputs[0].Value())
+			addr := strings.TrimSpace(f.inputs[1].Value())
+			if name == "" {
+				return fmt.Errorf("host name cannot be empty")
+			}
+			if addr == "" {
+				return fmt.Errorf("address cannot be empty")
+			}
+			port, err := strconv.Atoi(strings.TrimSpace(f.inputs[2].Value()))
+			if err != nil || port < 1 || port > 65535 {
+				return fmt.Errorf("port must be a number between 1 and 65535")
+			}
+			f.TargetHost.Name = name
+			f.TargetHost.Address = addr
 			f.TargetHost.Port = port
-			f.TargetHost.User = f.inputs[3].Value()
+			f.TargetHost.User = strings.TrimSpace(f.inputs[3].Value())
 			f.TargetHost.Password = f.inputs[4].Value()
+			f.TargetHost.KeyPath = strings.TrimSpace(f.inputs[5].Value())
 			return database.UpdateHost(f.TargetHost)
 		}
 	}

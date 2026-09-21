@@ -9,7 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// MillerColumns handles the rendering of the 3 columns
+// MillerColumns handles the three-column navigation layout.
 type MillerColumns struct {
 	Width       int
 	Height      int
@@ -25,17 +25,25 @@ type MillerColumns struct {
 func (m *MillerColumns) UpdateData(groups []database.Group, hosts []database.Host) {
 	m.Groups = groups
 	m.Hosts = hosts
-	if m.GroupCursor >= len(m.Groups) {
-		m.GroupCursor = len(m.Groups) - 1
+	m.clampCursors()
+}
+
+// ClampOffsets ensures scroll offsets are valid for the current terminal size.
+func (m *MillerColumns) ClampOffsets() {
+	vh := m.visibleHeight()
+
+	if m.GroupCursor >= m.GroupOffset+vh {
+		m.GroupOffset = m.GroupCursor - vh + 1
 	}
-	if m.GroupCursor < 0 {
-		m.GroupCursor = 0
+	if m.GroupOffset < 0 {
+		m.GroupOffset = 0
 	}
-	if m.HostCursor >= len(m.Hosts) {
-		m.HostCursor = len(m.Hosts) - 1
+
+	if m.HostCursor >= m.HostOffset+vh {
+		m.HostOffset = m.HostCursor - vh + 1
 	}
-	if m.HostCursor < 0 {
-		m.HostCursor = 0
+	if m.HostOffset < 0 {
+		m.HostOffset = 0
 	}
 }
 
@@ -54,21 +62,17 @@ func (m *MillerColumns) MoveUp() {
 }
 
 func (m *MillerColumns) MoveDown() {
-	// Account for the border in Height (Height - 2 for actual items)
-	visibleHeight := m.Height - 2
-	if visibleHeight < 1 {
-		visibleHeight = 1
-	}
+	vh := m.visibleHeight()
 
 	if m.ActiveCol == 0 && m.GroupCursor < len(m.Groups)-1 {
 		m.GroupCursor++
-		if m.GroupCursor >= m.GroupOffset+visibleHeight {
-			m.GroupOffset = m.GroupCursor - visibleHeight + 1
+		if m.GroupCursor >= m.GroupOffset+vh {
+			m.GroupOffset = m.GroupCursor - vh + 1
 		}
 	} else if m.ActiveCol == 1 && m.HostCursor < len(m.Hosts)-1 {
 		m.HostCursor++
-		if m.HostCursor >= m.HostOffset+visibleHeight {
-			m.HostOffset = m.HostCursor - visibleHeight + 1
+		if m.HostCursor >= m.HostOffset+vh {
+			m.HostOffset = m.HostCursor - vh + 1
 		}
 	}
 }
@@ -99,113 +103,206 @@ func (m *MillerColumns) SelectedHost() *database.Host {
 	return nil
 }
 
+func (m *MillerColumns) visibleHeight() int {
+	h := m.Height - 3 // border top/bottom (2) + column header (1)
+	if h < 1 {
+		h = 1
+	}
+	return h
+}
+
+func (m *MillerColumns) clampCursors() {
+	if m.GroupCursor >= len(m.Groups) {
+		m.GroupCursor = len(m.Groups) - 1
+	}
+	if m.GroupCursor < 0 {
+		m.GroupCursor = 0
+	}
+	if m.HostCursor >= len(m.Hosts) {
+		m.HostCursor = len(m.Hosts) - 1
+	}
+	if m.HostCursor < 0 {
+		m.HostCursor = 0
+	}
+}
+
+// View renders the three-column layout. Pure — does not mutate state.
 func (m *MillerColumns) View() string {
 	if m.Width == 0 || m.Height == 0 {
 		return ""
 	}
 
 	colWidth := (m.Width - 4) / 3
-	visibleHeight := m.Height - 2
-	if visibleHeight < 1 {
-		visibleHeight = 1
-	}
+	vh := m.visibleHeight()
 
-	// Adjust offsets if screen resizes
-	if m.GroupCursor >= m.GroupOffset+visibleHeight {
-		m.GroupOffset = m.GroupCursor - visibleHeight + 1
-	}
-	if m.HostCursor >= m.HostOffset+visibleHeight {
-		m.HostOffset = m.HostCursor - visibleHeight + 1
-	}
-
-	// Column 1: Groups
-	var groupItems []string
-	if m.GroupOffset > 0 {
-		groupItems = append(groupItems, NormalItemStyle.Render("  ↑ "))
-	}
-	for i := m.GroupOffset; i < len(m.Groups) && i < m.GroupOffset+visibleHeight; i++ {
-		g := m.Groups[i]
-		cursor := "  "
-		style := NormalItemStyle
-		if i == m.GroupCursor {
-			if m.ActiveCol == 0 {
-				cursor = "> "
-				style = SelectedStyle
-			} else {
-				style = SelectedStyle.Copy().Background(SumiInk3) // slightly dimmed if inactive
-			}
-		}
-		label := fmt.Sprintf("%s📁 %s", cursor, g.Name)
-		groupItems = append(groupItems, style.Width(colWidth-4).Render(label))
-	}
-	if len(m.Groups) > m.GroupOffset+visibleHeight {
-		groupItems = append(groupItems, NormalItemStyle.Render("  ↓ "))
-	}
-	
-	groupStyle := ColumnStyle.Copy().Width(colWidth).Height(m.Height)
-	if m.ActiveCol == 0 {
-		groupStyle = ActiveColumnStyle.Copy().Width(colWidth).Height(m.Height)
-	}
-	groupView := groupStyle.Render(strings.Join(groupItems, "\n"))
-
-	// Column 2: Hosts
-	var hostItems []string
-	if m.HostOffset > 0 {
-		hostItems = append(hostItems, NormalItemStyle.Render("  ↑ "))
-	}
-	for i := m.HostOffset; i < len(m.Hosts) && i < m.HostOffset+visibleHeight; i++ {
-		h := m.Hosts[i]
-		cursor := "  "
-		style := NormalItemStyle
-		if i == m.HostCursor {
-			if m.ActiveCol == 1 {
-				cursor = "> "
-				style = SelectedStyle
-			} else {
-				style = SelectedStyle.Copy().Background(SumiInk3)
-			}
-		}
-		label := fmt.Sprintf("%s🖥️  %s", cursor, h.Name)
-		hostItems = append(hostItems, style.Width(colWidth-4).Render(label))
-	}
-	if len(m.Hosts) > m.HostOffset+visibleHeight {
-		hostItems = append(hostItems, NormalItemStyle.Render("  ↓ "))
-	}
-
-	hostStyle := ColumnStyle.Copy().Width(colWidth).Height(m.Height)
-	if m.ActiveCol == 1 {
-		hostStyle = ActiveColumnStyle.Copy().Width(colWidth).Height(m.Height)
-	}
-	hostView := hostStyle.Render(strings.Join(hostItems, "\n"))
-
-	// Column 3: Details
-	var details string
-	if m.ActiveCol == 1 {
-		selectedHost := m.SelectedHost()
-		if selectedHost != nil {
-			var sb strings.Builder
-			sb.WriteString(TitleStyle.Render("Host Details") + "\n\n")
-			
-			renderLine := func(lbl, val string) string {
-				return HostDetailLabelStyle.Render(lbl) + HostDetailValueStyle.Render(val) + "\n"
-			}
-			
-			sb.WriteString(renderLine("Name:", selectedHost.Name))
-			sb.WriteString(renderLine("Address:", selectedHost.Address))
-			sb.WriteString(renderLine("Port:", fmt.Sprintf("%d", selectedHost.Port)))
-			sb.WriteString(renderLine("User:", selectedHost.User))
-			
-			details = sb.String()
-		}
-	} else {
-		selectedGroup := m.SelectedGroup()
-		if selectedGroup != nil {
-			details = TitleStyle.Render(fmt.Sprintf("Group: %s", selectedGroup.Name))
-		}
-	}
-
-	detailStyle := ColumnStyle.Copy().Width(colWidth).Height(m.Height)
-	detailView := detailStyle.Render(details)
+	groupView := m.renderGroupColumn(vh, colWidth)
+	hostView := m.renderHostColumn(vh, colWidth)
+	detailView := m.renderDetails(colWidth)
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, groupView, hostView, detailView)
+}
+
+// ── Groups column ───────────────────────────────────────────────────
+
+func (m *MillerColumns) renderGroupColumn(vh, colWidth int) string {
+	isActive := m.ActiveCol == 0
+	var lines []string
+
+	lines = append(lines, ColumnHeaderStyle.Render("GROUPS"))
+
+	if len(m.Groups) == 0 {
+		lines = append(lines, EmptyStyle.Render("No groups yet.\nPress a to add one."))
+	} else {
+		if m.GroupOffset > 0 {
+			lines = append(lines, ItemStyle.Render("  ↑"))
+		}
+		for i := m.GroupOffset; i < len(m.Groups) && i < m.GroupOffset+vh; i++ {
+			cursor := "   "
+			style := ItemStyle
+			if i == m.GroupCursor {
+				if isActive {
+					cursor = " ▸ "
+					style = ItemSelectedStyle
+				} else {
+					cursor = "   "
+					style = ItemDimSelectedStyle
+				}
+			}
+			label := cursor + m.Groups[i].Name
+			lines = append(lines, style.Width(colWidth-4).Render(label))
+		}
+		if len(m.Groups) > m.GroupOffset+vh {
+			lines = append(lines, ItemStyle.Render("  ↓"))
+		}
+	}
+
+	colStyle := ColumnStyle.Width(colWidth).Height(m.Height)
+	if isActive {
+		colStyle = ActiveColumnStyle.Width(colWidth).Height(m.Height)
+	}
+	return colStyle.Render(strings.Join(lines, "\n"))
+}
+
+// ── Hosts column ────────────────────────────────────────────────────
+
+func (m *MillerColumns) renderHostColumn(vh, colWidth int) string {
+	isActive := m.ActiveCol == 1
+	var lines []string
+
+	lines = append(lines, ColumnHeaderStyle.Render("HOSTS"))
+
+	if len(m.Hosts) == 0 {
+		if m.ActiveCol >= 1 {
+			lines = append(lines, EmptyStyle.Render("No hosts in group.\nPress a to add one."))
+		} else {
+			lines = append(lines, EmptyStyle.Render("Select a group."))
+		}
+	} else {
+		if m.HostOffset > 0 {
+			lines = append(lines, ItemStyle.Render("  ↑"))
+		}
+		for i := m.HostOffset; i < len(m.Hosts) && i < m.HostOffset+vh; i++ {
+			cursor := "   "
+			style := ItemStyle
+			if i == m.HostCursor {
+				if isActive {
+					cursor = " ▸ "
+					style = ItemSelectedStyle
+				} else {
+					cursor = "   "
+					style = ItemDimSelectedStyle
+				}
+			}
+			label := cursor + m.Hosts[i].Name
+			lines = append(lines, style.Width(colWidth-4).Render(label))
+		}
+		if len(m.Hosts) > m.HostOffset+vh {
+			lines = append(lines, ItemStyle.Render("  ↓"))
+		}
+	}
+
+	colStyle := ColumnStyle.Width(colWidth).Height(m.Height)
+	if isActive {
+		colStyle = ActiveColumnStyle.Width(colWidth).Height(m.Height)
+	}
+	return colStyle.Render(strings.Join(lines, "\n"))
+}
+
+// ── Details column ──────────────────────────────────────────────────
+
+func (m *MillerColumns) renderDetails(colWidth int) string {
+	var sb strings.Builder
+
+	sb.WriteString(ColumnHeaderStyle.Render("DETAILS"))
+	sb.WriteString("\n")
+
+	divW := colWidth - 8
+	if divW < 4 {
+		divW = 4
+	}
+	divider := DetailDividerStyle.Render(strings.Repeat("─", divW))
+
+	if m.ActiveCol == 1 {
+		host := m.SelectedHost()
+		if host != nil {
+			// Connection header
+			sb.WriteString("\n")
+			sb.WriteString(DetailNameStyle.Render("  " + host.Name))
+			sb.WriteString("\n")
+
+			connStr := host.User + "@" + host.Address
+			if host.Port != 22 {
+				connStr += fmt.Sprintf(":%d", host.Port)
+			}
+			sb.WriteString(DetailConnStyle.Render("  " + connStr))
+			sb.WriteString("\n\n")
+
+			// Divider
+			sb.WriteString("  " + divider + "\n\n")
+
+			// Detail fields
+			line := func(lbl, val string) {
+				sb.WriteString("  " + DetailLabelStyle.Render(lbl) + DetailValueStyle.Render(val) + "\n")
+			}
+			line("User", host.User)
+			line("Address", host.Address)
+			line("Port", fmt.Sprintf("%d", host.Port))
+			if host.KeyPath != "" {
+				line("Key", host.KeyPath)
+			} else {
+				line("Auth", "SSH Agent / Password")
+			}
+
+			sb.WriteString("\n  " + divider + "\n\n")
+
+			// Action hint
+			sb.WriteString(DetailHintStyle.Render("  ⏎ Enter to connect"))
+		}
+	} else {
+		grp := m.SelectedGroup()
+		if grp != nil {
+			sb.WriteString("\n")
+			sb.WriteString(DetailNameStyle.Render("  " + grp.Name))
+			sb.WriteString("\n\n")
+
+			hostCount := len(m.Hosts)
+			var countText string
+			switch hostCount {
+			case 0:
+				countText = "No hosts"
+			case 1:
+				countText = "1 host"
+			default:
+				countText = fmt.Sprintf("%d hosts", hostCount)
+			}
+			sb.WriteString(MutedStyle.Render("  " + countText))
+			sb.WriteString("\n\n")
+
+			sb.WriteString("  " + divider + "\n\n")
+			sb.WriteString(DetailHintStyle.Render("  → to browse hosts"))
+		}
+	}
+
+	detailStyle := ColumnStyle.Width(colWidth).Height(m.Height)
+	return detailStyle.Render(sb.String())
 }

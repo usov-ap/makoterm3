@@ -1,62 +1,72 @@
 package sshclient
 
 import (
+	"bufio"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
+	"os/signal"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
 
 	"makoterm/database"
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
+	"golang.org/x/crypto/ssh/knownhosts"
 	"golang.org/x/term"
-	"net"
-	"path/filepath"
 )
 
-// Session represents an active SSH session wrapper
-type Session struct {
-	Host       database.Host
-	Client     *ssh.Client
-	SSHSession *ssh.Session
-}
-
-// Connect starts a new full-screen SSH session
+// Connect starts a new full-screen SSH session.
+// It runs synchronously and blocks until the remote shell exits.
 func Connect(host database.Host) error {
 	var authMethods []ssh.AuthMethod
 
 	// 1. Try SSH Agent
 	if authSock := os.Getenv("SSH_AUTH_SOCK"); authSock != "" {
 		if conn, err := net.Dial("unix", authSock); err == nil {
+			defer conn.Close()
 			agentClient := agent.NewClient(conn)
 			authMethods = append(authMethods, ssh.PublicKeysCallback(agentClient.Signers))
 		}
 	}
 
-	// 2. Try standard keys if they exist
-	homeDir, _ := os.UserHomeDir()
-	keyPaths := []string{
-		filepath.Join(homeDir, ".ssh", "id_ed25519"),
-		filepath.Join(homeDir, ".ssh", "id_rsa"),
-	}
-	
-	for _, p := range keyPaths {
-		if key, err := os.ReadFile(p); err == nil {
-			if signer, err := ssh.ParsePrivateKey(key); err == nil {
-				authMethods = append(authMethods, ssh.PublicKeys(signer))
-			}
+	// 2. Try host-specific key if configured
+	if host.KeyPath != "" {
+		if signer, err := loadKey(host.KeyPath); err == nil {
+			authMethods = append(authMethods, ssh.PublicKeys(signer))
 		}
 	}
 
-	// 3. Fallback to password
+	// 3. Try standard keys (~/.ssh/id_ed25519, ~/.ssh/id_rsa)
+	homeDir, _ := os.UserHomeDir()
+	for _, name := range []string{"id_ed25519", "id_rsa"} {
+		p := filepath.Join(homeDir, ".ssh", name)
+		if signer, err := loadKey(p); err == nil {
+			authMethods = append(authMethods, ssh.PublicKeys(signer))
+		}
+	}
+
+	// 4. Fallback to password
 	if host.Password != "" {
 		authMethods = append(authMethods, ssh.Password(host.Password))
+	}
+
+	// Host key verification via ~/.ssh/known_hosts
+	hostKeyCallback, err := newKnownHostsCallback()
+	if err != nil {
+		return fmt.Errorf("known_hosts: %w", err)
 	}
 
 	config := &ssh.ClientConfig{
 		User:            host.User,
 		Auth:            authMethods,
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // Insecure for demo, should verify in production
+		HostKeyCallback: hostKeyCallback,
+		Timeout:         10 * time.Second,
 		Config: ssh.Config{
 			Ciphers: []string{
 				"aes128-gcm@openssh.com",
@@ -88,25 +98,23 @@ func Connect(host database.Host) error {
 			},
 		},
 	}
-	
+
 	addr := fmt.Sprintf("%s:%d", host.Address, host.Port)
 	client, err := ssh.Dial("tcp", addr, config)
 	if err != nil {
-		return fmt.Errorf("failed to connect: %w", err)
+		return fmt.Errorf("connect to %s: %w", addr, err)
 	}
 	defer client.Close()
-	
+
 	session, err := client.NewSession()
 	if err != nil {
-		return fmt.Errorf("failed to create session: %w", err)
+		return fmt.Errorf("create session on %s: %w", addr, err)
 	}
 	defer session.Close()
 
 	// Setup standard IO
 	session.Stdout = os.Stdout
 	session.Stderr = os.Stderr
-	// TODO: We need to intercept Stdin to watch for Ctrl+X to detach.
-	// For now we pass Stdin directly.
 	session.Stdin = os.Stdin
 
 	// Request pseudo terminal
@@ -119,7 +127,7 @@ func Connect(host database.Host) error {
 	fd := int(os.Stdin.Fd())
 	oldState, err := term.MakeRaw(fd)
 	if err != nil {
-		return err
+		return fmt.Errorf("set raw terminal: %w", err)
 	}
 	defer term.Restore(fd, oldState)
 
@@ -129,22 +137,140 @@ func Connect(host database.Host) error {
 	}
 
 	if err := session.RequestPty("xterm-256color", termHeight, termWidth, modes); err != nil {
-		return fmt.Errorf("request for pseudo terminal failed: %w", err)
+		return fmt.Errorf("request PTY on %s: %w", addr, err)
 	}
+
+	// Forward terminal resize (SIGWINCH) to the remote PTY
+	done := make(chan struct{})
+	resizeCh := make(chan os.Signal, 1)
+	signal.Notify(resizeCh, syscall.SIGWINCH)
+	defer func() {
+		signal.Stop(resizeCh)
+		close(done)
+	}()
+
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			case <-resizeCh:
+				if w, h, err := term.GetSize(fd); err == nil {
+					_ = session.WindowChange(h, w)
+				}
+			}
+		}
+	}()
 
 	// Start remote shell
 	if err := session.Shell(); err != nil {
-		return fmt.Errorf("failed to start shell: %w", err)
+		return fmt.Errorf("start shell on %s: %w", addr, err)
 	}
 
 	// Wait for session to finish
-	err = session.Wait()
-	if err != nil {
-		// ExitError means remote command exited non-zero, this is normal
+	if err := session.Wait(); err != nil {
+		// ExitError means the remote command exited non-zero — this is normal
 		if _, ok := err.(*ssh.ExitError); !ok && err != io.EOF {
 			return err
 		}
 	}
 
 	return nil
+}
+
+// loadKey reads and parses an SSH private key from the given path.
+func loadKey(path string) (ssh.Signer, error) {
+	key, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return ssh.ParsePrivateKey(key)
+}
+
+// newKnownHostsCallback returns a host key callback that verifies against
+// ~/.ssh/known_hosts. If the host is unknown, it prompts the user interactively
+// (similar to OpenSSH). If the host key has changed, it refuses the connection.
+func newKnownHostsCallback() (ssh.HostKeyCallback, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("get home directory: %w", err)
+	}
+
+	knownHostsPath := filepath.Join(homeDir, ".ssh", "known_hosts")
+
+	// Ensure ~/.ssh directory exists with proper permissions
+	if err := os.MkdirAll(filepath.Dir(knownHostsPath), 0700); err != nil {
+		return nil, fmt.Errorf("create .ssh directory: %w", err)
+	}
+
+	// Create known_hosts file if it doesn't exist
+	if _, err := os.Stat(knownHostsPath); os.IsNotExist(err) {
+		f, err := os.OpenFile(knownHostsPath, os.O_CREATE|os.O_WRONLY, 0600)
+		if err != nil {
+			return nil, fmt.Errorf("create known_hosts: %w", err)
+		}
+		f.Close()
+	}
+
+	checker, err := knownhosts.New(knownHostsPath)
+	if err != nil {
+		return nil, fmt.Errorf("parse known_hosts: %w", err)
+	}
+
+	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+		err := checker(hostname, remote, key)
+		if err == nil {
+			return nil // Host key matches
+		}
+
+		var keyErr *knownhosts.KeyError
+		if !errors.As(err, &keyErr) {
+			return err // Some other error
+		}
+
+		if len(keyErr.Want) > 0 {
+			// Host key has CHANGED — refuse connection
+			fmt.Fprintf(os.Stderr,
+				"\n@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"+
+					"@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!    @\n"+
+					"@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"+
+					"Host key for %s has changed.\n"+
+					"This could indicate a man-in-the-middle attack.\n"+
+					"Update %s manually if this is expected.\n",
+				hostname, knownHostsPath)
+			return fmt.Errorf("host key changed for %s", hostname)
+		}
+
+		// Unknown host — prompt user to accept (like OpenSSH)
+		fingerprint := ssh.FingerprintSHA256(key)
+		fmt.Fprintf(os.Stderr,
+			"\nThe authenticity of host '%s' can't be established.\n"+
+				"%s key fingerprint is %s.\n"+
+				"Are you sure you want to continue connecting? (yes/no): ",
+			hostname, key.Type(), fingerprint)
+
+		reader := bufio.NewReader(os.Stdin)
+		answer, _ := reader.ReadString('\n')
+		answer = strings.TrimSpace(strings.ToLower(answer))
+
+		if answer != "yes" && answer != "y" {
+			return fmt.Errorf("host key verification rejected by user")
+		}
+
+		// Append to known_hosts
+		line := knownhosts.Line([]string{knownhosts.Normalize(hostname)}, key)
+		f, err := os.OpenFile(knownHostsPath, os.O_APPEND|os.O_WRONLY, 0600)
+		if err != nil {
+			return fmt.Errorf("save to known_hosts: %w", err)
+		}
+		defer f.Close()
+
+		if _, err := fmt.Fprintln(f, line); err != nil {
+			return fmt.Errorf("write to known_hosts: %w", err)
+		}
+
+		fmt.Fprintf(os.Stderr, "Warning: Permanently added '%s' (%s) to the list of known hosts.\n",
+			hostname, key.Type())
+		return nil
+	}, nil
 }
