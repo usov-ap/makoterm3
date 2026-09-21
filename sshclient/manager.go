@@ -24,36 +24,96 @@ import (
 // Connect starts a new full-screen SSH session.
 // It runs synchronously and blocks until the remote shell exits.
 func Connect(host database.Host) error {
-	var authMethods []ssh.AuthMethod
+	// Collect all SSH signers into a single callback.
+	// IMPORTANT: Go's x/crypto/ssh treats each AuthMethod entry as one attempt
+	// at the "publickey" method. If the first one (e.g. an empty agent) returns
+	// no signers, the server's response marks "publickey" as failed and all
+	// remaining publickey AuthMethods are skipped. By merging all signers into
+	// a single PublicKeysCallback, we ensure every key is tried in one pass.
+	var signers []ssh.Signer
 
-	// 1. Try SSH Agent
+	// 1. SSH Agent signers
 	if authSock := os.Getenv("SSH_AUTH_SOCK"); authSock != "" {
 		if conn, err := net.Dial("unix", authSock); err == nil {
 			defer conn.Close()
 			agentClient := agent.NewClient(conn)
-			authMethods = append(authMethods, ssh.PublicKeysCallback(agentClient.Signers))
+			if agentSigners, err := agentClient.Signers(); err == nil {
+				signers = append(signers, agentSigners...)
+			}
 		}
 	}
 
-	// 2. Try host-specific key if configured
+	// 2. Host-specific key if configured
 	if host.KeyPath != "" {
 		if signer, err := loadKey(host.KeyPath); err == nil {
-			authMethods = append(authMethods, ssh.PublicKeys(signer))
+			signers = append(signers, signer)
 		}
 	}
 
-	// 3. Try standard keys (~/.ssh/id_ed25519, ~/.ssh/id_rsa)
+	// 3. Standard keys (~/.ssh/id_ed25519, ~/.ssh/id_rsa)
 	homeDir, _ := os.UserHomeDir()
 	for _, name := range []string{"id_ed25519", "id_rsa"} {
 		p := filepath.Join(homeDir, ".ssh", name)
 		if signer, err := loadKey(p); err == nil {
-			authMethods = append(authMethods, ssh.PublicKeys(signer))
+			signers = append(signers, signer)
 		}
+	}
+
+	var authMethods []ssh.AuthMethod
+	if len(signers) > 0 {
+		authMethods = append(authMethods, ssh.PublicKeysCallback(func() ([]ssh.Signer, error) {
+			return signers, nil
+		}))
 	}
 
 	// 4. Fallback to password
 	if host.Password != "" {
 		authMethods = append(authMethods, ssh.Password(host.Password))
+
+		// Also add keyboard-interactive with the stored password,
+		// since some servers (e.g. Rockchip, embedded Linux) only accept this method.
+		authMethods = append(authMethods, ssh.KeyboardInteractive(
+			func(user, instruction string, questions []string, echos []bool) ([]string, error) {
+				answers := make([]string, len(questions))
+				for i := range questions {
+					answers[i] = host.Password
+				}
+				return answers, nil
+			},
+		))
+	} else {
+		// 5. No stored password — prompt interactively
+		authMethods = append(authMethods, ssh.PasswordCallback(func() (string, error) {
+			fmt.Fprintf(os.Stderr, "%s@%s's password: ", host.User, host.Address)
+			pass, err := term.ReadPassword(int(os.Stdin.Fd()))
+			fmt.Fprintln(os.Stderr) // newline after hidden input
+			if err != nil {
+				return "", err
+			}
+			return string(pass), nil
+		}))
+
+		authMethods = append(authMethods, ssh.KeyboardInteractive(
+			func(user, instruction string, questions []string, echos []bool) ([]string, error) {
+				answers := make([]string, len(questions))
+				for i, q := range questions {
+					fmt.Fprintf(os.Stderr, "%s", q)
+					if echos[i] {
+						reader := bufio.NewReader(os.Stdin)
+						line, _ := reader.ReadString('\n')
+						answers[i] = strings.TrimSpace(line)
+					} else {
+						pass, err := term.ReadPassword(int(os.Stdin.Fd()))
+						fmt.Fprintln(os.Stderr)
+						if err != nil {
+							return nil, err
+						}
+						answers[i] = string(pass)
+					}
+				}
+				return answers, nil
+			},
+		))
 	}
 
 	// Host key verification via ~/.ssh/known_hosts
