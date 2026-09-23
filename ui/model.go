@@ -10,8 +10,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-type errMsg error
-
 type State int
 
 const (
@@ -20,6 +18,10 @@ const (
 	StateConfirmDelete
 	StateHelp
 )
+
+// minFooterWidth is the width below which the footer keeps only the two most
+// important hints instead of overflowing.
+const minFooterWidth = 40
 
 // pendingDelete holds context for a delete confirmation dialog.
 type pendingDelete struct {
@@ -47,19 +49,7 @@ func InitialModel() Model {
 			ActiveCol: 0,
 		},
 	}
-
-	groups, err := database.GetRootGroups()
-	if err != nil {
-		m.err = err
-	}
-
-	var hosts []database.Host
-	if len(groups) > 0 {
-		hosts, _ = database.GetHostsForGroup(groups[0].ID)
-	}
-
-	m.miller.UpdateData(groups, hosts)
-
+	m.reload()
 	return m
 }
 
@@ -167,30 +157,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "a":
+			// Only open a form when there is a valid target; otherwise the
+			// state would flip to a form with no fields.
 			if m.miller.ActiveCol == 0 {
 				m.form = NewForm(FormTypeGroupAdd, nil, nil)
-			} else if m.miller.ActiveCol == 1 {
-				grp := m.miller.SelectedGroup()
-				if grp != nil {
-					m.form = NewForm(FormTypeHostAdd, grp, nil)
-				}
+			} else if grp := m.miller.SelectedGroup(); grp != nil {
+				m.form = NewForm(FormTypeHostAdd, grp, nil)
+			} else {
+				return m, nil
 			}
 			m.state = StateForm
 
 		case "e":
 			if m.miller.ActiveCol == 0 {
 				grp := m.miller.SelectedGroup()
-				if grp != nil {
-					m.form = NewForm(FormTypeGroupEdit, grp, nil)
-					m.state = StateForm
+				if grp == nil {
+					return m, nil
 				}
-			} else if m.miller.ActiveCol == 1 {
-				host := m.miller.SelectedHost()
-				if host != nil {
-					m.form = NewForm(FormTypeHostEdit, nil, host)
-					m.state = StateForm
-				}
+				m.form = NewForm(FormTypeGroupEdit, grp, nil)
+			} else if host := m.miller.SelectedHost(); host != nil {
+				m.form = NewForm(FormTypeHostEdit, nil, host)
+			} else {
+				return m, nil
 			}
+			m.state = StateForm
 
 		case "d":
 			if m.miller.ActiveCol == 0 {
@@ -216,12 +206,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 
 		m.miller.Width = msg.Width
-		m.miller.Height = msg.Height - 2 // header bar + footer bar
+		m.miller.Height = intMax(0, msg.Height-2) // header bar + footer bar
 
 		m.miller.ClampOffsets()
-
-	case errMsg:
-		m.err = msg
 	}
 
 	return m, nil
@@ -229,58 +216,83 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) updateHosts() {
 	group := m.miller.SelectedGroup()
-	if group != nil {
-		hosts, _ := database.GetHostsForGroup(group.ID)
-		m.miller.Hosts = hosts
-
-		if m.miller.HostCursor >= len(hosts) {
-			m.miller.HostCursor = len(hosts) - 1
-		}
-		if m.miller.HostCursor < 0 {
-			m.miller.HostCursor = 0
-		}
+	if group == nil {
+		// Always clear the cache: a stale host list would let the user act on
+		// a host that no longer belongs to the visible group.
+		m.miller.Hosts = nil
+		m.miller.HostCursor = 0
+		m.miller.HostOffset = 0
+		return
 	}
+
+	hosts, err := database.GetHostsForGroup(group.ID)
+	if err != nil {
+		m.err = err
+		return
+	}
+	m.miller.Hosts = hosts
+
+	if m.miller.HostCursor >= len(hosts) {
+		m.miller.HostCursor = len(hosts) - 1
+	}
+	if m.miller.HostCursor < 0 {
+		m.miller.HostCursor = 0
+	}
+	// The list shrank (or the group changed): re-derive the scroll window.
+	m.miller.UpdateData(m.miller.Groups, hosts)
 }
 
+// reload refreshes the group list and the hosts of the selected group.
 func (m *Model) reload() {
-	groups, _ := database.GetRootGroups()
+	groups, err := database.GetRootGroups()
+	if err != nil {
+		m.err = err
+		return
+	}
 	m.miller.Groups = groups
+	m.miller.clampCursors()
 	m.updateHosts()
 }
 
 // ── View ────────────────────────────────────────────────────────────
 
 func (m Model) View() string {
-	if m.width == 0 {
+	if m.width == 0 || m.height == 0 {
 		return "" // terminal not yet sized
 	}
 
 	header := m.renderHeader()
 	footer := m.renderFooter()
-	contentHeight := m.height - 2
+	contentHeight := intMax(0, m.height-2)
 
-	var mainView string
+	var dialog string
+	dialogLayer := true
 
-	if m.err != nil {
-		errDialog := m.renderError()
-		mainView = lipgloss.Place(m.width, contentHeight, lipgloss.Center, lipgloss.Center, errDialog)
-	} else {
-		switch m.state {
-		case StateForm:
-			formStr := m.form.View()
-			mainView = lipgloss.Place(m.width, contentHeight, lipgloss.Center, lipgloss.Center, formStr)
-		case StateConfirmDelete:
-			confirmStr := m.renderConfirmation()
-			mainView = lipgloss.Place(m.width, contentHeight, lipgloss.Center, lipgloss.Center, confirmStr)
-		case StateHelp:
-			helpStr := renderHelp()
-			mainView = lipgloss.Place(m.width, contentHeight, lipgloss.Center, lipgloss.Center, helpStr)
-		default:
-			mainView = m.miller.View()
-		}
+	switch {
+	case m.err != nil:
+		dialog = m.renderError()
+	case m.state == StateForm:
+		dialog = m.form.View()
+	case m.state == StateConfirmDelete:
+		dialog = m.renderConfirmation()
+	case m.state == StateHelp:
+		dialog = renderHelp()
+	default:
+		dialogLayer = false
 	}
 
-	return lipgloss.JoinVertical(lipgloss.Left, header, mainView, footer)
+	var mainView string
+	if dialogLayer {
+		mainView = lipgloss.Place(m.width, contentHeight, lipgloss.Center, lipgloss.Center,
+			clipHeight(dialog, contentHeight))
+	} else {
+		mainView = clipHeight(m.miller.View(), contentHeight)
+	}
+
+	// The frame is exactly m.height rows: header + content + footer. Clipping
+	// here is the last line of defence against a layout that grows past the
+	// terminal and scrolls the header off screen.
+	return clipHeight(lipgloss.JoinVertical(lipgloss.Left, header, mainView, footer), m.height)
 }
 
 // ── Header bar ──────────────────────────────────────────────────────
@@ -340,12 +352,59 @@ func (m Model) renderFooter() string {
 		}
 	}
 
-	content := strings.Join(items, "   ")
-	return FooterBarStyle.Width(m.width).Render(content)
+	// The bar has one column of padding on each side.
+	available := intMax(0, m.width-2)
+	content := fitItems(items, available, minFooterWidth)
+	return FooterBarStyle.Width(m.width).Render(clipHeight(content, 1))
 }
 
 func footerItem(key, action string) string {
 	return FooterKeyStyle.Render(key) + " " + FooterActionStyle.Render(action)
+}
+
+// fitItems joins as many items as fit into width, dropping the least important
+// ones from the end. Without this the footer wraps on narrow terminals and
+// pushes the layout past the bottom of the screen.
+func fitItems(items []string, width, minWidth int) string {
+	if width <= 0 {
+		return ""
+	}
+	// Below minWidth show only the first (most important) hint.
+	if width < minWidth && len(items) > 1 {
+		items = items[:1]
+	}
+
+	separator := "   "
+	var b strings.Builder
+	for _, item := range items {
+		candidate := item
+		if b.Len() > 0 {
+			candidate = separator + item
+		}
+		if lipgloss.Width(b.String())+lipgloss.Width(candidate) > width {
+			break
+		}
+		b.WriteString(candidate)
+	}
+	if b.Len() == 0 && len(items) > 0 {
+		// Always show something, even if it has to be truncated.
+		return truncate(items[0], width)
+	}
+	return b.String()
+}
+
+// clipHeight guarantees a rendered block is at most lines tall. lipgloss
+// Height() is a minimum, not a maximum, so any overflow would otherwise push
+// the layout past the bottom of the terminal.
+func clipHeight(s string, lines int) string {
+	if lines <= 0 {
+		return ""
+	}
+	parts := strings.Split(s, "\n")
+	if len(parts) <= lines {
+		return s
+	}
+	return strings.Join(parts[:lines], "\n")
 }
 
 // ── Help screen ─────────────────────────────────────────────────────

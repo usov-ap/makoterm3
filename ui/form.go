@@ -92,6 +92,12 @@ func NewForm(fType FormType, group *database.Group, host *database.Host) Form {
 }
 
 func (f *Form) Update(msg tea.Msg) (Form, tea.Cmd) {
+	// A form always has at least one field, but guard anyway: the focus
+	// arithmetic below divides by len(inputs) and would panic.
+	if len(f.inputs) == 0 {
+		return *f, nil
+	}
+
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
