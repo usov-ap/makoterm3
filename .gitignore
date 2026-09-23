@@ -18,6 +18,9 @@ makoterm
 # Go workspace file
 go.work
 
+# Local caches created by scripts/goenv.sh (sandboxed/offline environments)
+.tmp/
+
 # IDEs and editors
 .idea/
 .vscode/
