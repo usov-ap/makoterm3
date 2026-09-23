@@ -1,6 +1,7 @@
 package database
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -131,7 +132,7 @@ func TestInitDB_CreatesFile(t *testing.T) {
 	}
 }
 
-func TestInitDB_SecuresWALSidecars(t *testing.T) {
+func TestInitDB_SecuresDatabaseFiles(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
@@ -140,17 +141,71 @@ func TestInitDB_SecuresWALSidecars(t *testing.T) {
 	}
 	defer func() { DB = nil }()
 
-	// WAL mode creates sidecar files lazily; if they exist they must be 0600.
-	for _, suffix := range []string{"-wal", "-shm"} {
+	// The database may be torn down while a sidecar still exists; if it does,
+	// it must be owner-only as well.
+	for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
 		path := dbPath + suffix
 		info, err := os.Stat(path)
 		if err != nil {
-			continue // not created yet on this platform
+			continue // not created
 		}
 		if perm := info.Mode().Perm(); perm != 0600 {
-			t.Errorf("%s permissions = %o, want 0600", suffix, perm)
+			t.Errorf("%s permissions = %o, want 0600", filepath.Base(path), perm)
 		}
 	}
+}
+
+// TestDeleteHost_LeavesNoSecretInAnyFile is the end-to-end storage check: the
+// password of a deleted host must not be readable in the database file or in
+// any journal/WAL sidecar.
+//
+// A previous version used WAL journaling, and even though rows were deleted
+// with SECURE_DELETE + VACUUM, the pre-delete page images stayed in the -wal
+// file until a checkpoint truncated it.
+func TestDeleteHost_LeavesNoSecretInAnyFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+
+	if err := InitDB(dbPath); err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	defer func() { DB = nil }()
+
+	prod := findGroup(t, "Production")
+	if prod == nil {
+		t.Fatal("Production group not found")
+	}
+
+	const secret = "ON-DISK-SECRET-VALUE"
+	host := &Host{GroupID: &prod.ID, Name: "disk", Address: "192.0.2.7", Port: 22, Password: secret}
+	if err := CreateHost(host); err != nil {
+		t.Fatalf("CreateHost failed: %v", err)
+	}
+	if !secretInAnyFile(dbPath, secret) {
+		t.Fatal("test setup is wrong: the stored password should be in a file")
+	}
+
+	if err := DeleteHost(host); err != nil {
+		t.Fatalf("DeleteHost failed: %v", err)
+	}
+	if secretInAnyFile(dbPath, secret) {
+		t.Error("password of a deleted host is still readable in the database files")
+	}
+}
+
+// secretInAnyFile reports whether the value appears in the database file or any
+// of its journal/WAL sidecars.
+func secretInAnyFile(dbPath, secret string) bool {
+	for _, path := range []string{dbPath, dbPath + "-wal", dbPath + "-shm", dbPath + "-journal"} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		if bytes.Contains(data, []byte(secret)) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestInitDB_SeedsData(t *testing.T) {

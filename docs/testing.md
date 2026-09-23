@@ -47,7 +47,7 @@ staticcheck ./...
 | Тест | Описание |
 |------|----------|
 | `TestInitDB_CreatesFile` | Файл БД создаётся, права 0600 |
-| `TestInitDB_SecuresWALSidecars` | WAL-файлы тоже 0600 (если созданы) |
+| `TestInitDB_SecuresDatabaseFiles` | Файл БД и журнальные файлы — 0600 |
 | `TestInitDB_SeedsData` | Демо-данные: 2 группы + 3 хоста, корень скрыт |
 | `TestInitDB_SeedsOnlyOnce` | После удаления групп демо-данные не возвращаются |
 | `TestInitDB_NoDemoEnv` | `MAKOTERM_NO_DEMO=1` отключает демо-данные, корень остаётся |
@@ -79,6 +79,7 @@ staticcheck ./...
 | `TestUpdateHost` | Обновление полей хоста |
 | `TestDeleteHost` | Удаление одного хоста |
 | `TestDeleteHost_LeavesNoPasswordBehind` | Удалённый пароль не остаётся даже в `Unscoped` выборке |
+| `TestDeleteHost_LeavesNoSecretInAnyFile` | Пароль не читается ни в файле БД, ни в журнале/WAL |
 | `TestDeleteGroup_LeavesNoPasswordBehind` | То же для хостов удалённой группы |
 
 ## Тесты SSH-клиента

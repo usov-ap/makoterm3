@@ -36,14 +36,19 @@ const defaultDBName = ".makoterm.db"
 //
 //   - busy_timeout  — wait instead of failing with "database is locked" when a
 //     second MakoTerm instance touches the file.
-//   - journal_mode  — WAL is more crash-resistant and allows concurrent reads.
 //   - secure_delete — overwrite deleted content with zeros, so plaintext
 //     passwords do not survive in free pages.
+//
+// The journal mode is deliberately the default (DELETE), not WAL. With WAL the
+// pre-delete page images stay in a growing -wal sidecar until a checkpoint
+// truncates it, so a deleted password remains readable in that file — exactly
+// the leak this application must avoid. The rollback journal used by DELETE is
+// removed at the end of every transaction instead.
 //
 // foreign_keys is deliberately NOT set here: AutoMigrate rebuilds tables to add
 // constraints, and SQLite fails that copy while enforcement is on. migrate()
 // enables it explicitly once the schema is up to date.
-const dsnOptions = "?_busy_timeout=5000&_journal_mode=WAL&_secure_delete=on"
+const dsnOptions = "?_busy_timeout=5000&_secure_delete=on"
 
 // InitDB initializes the SQLite database.
 // If dbPath is empty, defaults to ~/.makoterm.db
