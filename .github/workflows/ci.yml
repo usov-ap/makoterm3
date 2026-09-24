@@ -16,8 +16,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Lowest supported version plus the current release.
-        go: ['1.24.x', '1.27.x']
+        # Lowest supported version plus the current release. The floor is 1.25:
+        # golang.org/x/crypto v0.52.0 (and the rest of golang.org/x/*) requires
+        # go >= 1.25.0, and GOTOOLCHAIN=local refuses to download a newer one.
+        go: ['1.25.x', '1.27.x']
 
     steps:
       - uses: actions/checkout@v5
